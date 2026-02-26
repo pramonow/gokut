@@ -2,56 +2,77 @@ package main
 
 import (
 	"fmt"
-	"sync"
+	"time"
 )
 
-// Cache is a thread-safe in-memory store using Generics.
-// K must be 'comparable' (string, int, etc.), V can be 'any' type.
-type Cache[K comparable, V any] struct {
-	mu    sync.RWMutex
-	items map[K]V
-}
-
-// NewCache initializes and returns a new Cache instance.
-func NewCache[K comparable, V any]() *Cache[K, V] {
-	return &Cache[K, V]{
-		items: make(map[K]V),
-	}
-}
-
-// Set adds or updates an item in the cache.
-func (c *Cache[K, V]) Set(key K, value V) {
-	c.mu.Lock()         // Lock for writing
-	defer c.mu.Unlock() // Ensure unlock happens after the function ends
-	c.items[key] = value
-}
-
-// Get retrieves an item from the cache.
-// It returns the value and a boolean indicating if the key exists.
-func (c *Cache[K, V]) Get(key K) (V, bool) {
-	c.mu.RLock() // RLock allows multiple simultaneous readers
-	defer c.mu.RUnlock()
-	val, found := c.items[key]
-	return val, found
-}
-
 func main() {
-	// 1. Initialize a cache that stores string keys and int values
-	userAgeCache := NewCache[string, int]()
+	fmt.Println("=== In-Memory Cache Demo ===")
+	fmt.Println()
 
-	// 2. Set a value
-	fmt.Println("Setting user 'Alice' age to 25...")
-	userAgeCache.Set("Alice", 25)
+	// Start a cache with a janitor that sweeps every 500 ms.
+	cache := NewCache[string, int](500 * time.Millisecond)
+	defer cache.Stop()
 
-	// 3. Get a value
-	age, found := userAgeCache.Get("Alice")
-	if found {
-		fmt.Printf("Found Alice: %d years old\n", age)
+	// Log every eviction so we can see the linked-list janitor at work.
+	cache.SetOnEviction(func(key string, value int) {
+		fmt.Printf("  [eviction] key=%q  value=%d\n", key, value)
+	})
+
+	// ── Set items with different TTLs ─────────────────────────────────────────
+	fmt.Println("Setting items...")
+	cache.Set("alice", 25, 2*time.Second)   // expires in 2 s
+	cache.Set("bob", 30, 4*time.Second)     // expires in 4 s
+	cache.Set("charlie", 35, 6*time.Second) // expires in 6 s
+	cache.Set("diana", 40, NoExpiration)    // lives forever
+
+	fmt.Printf("Items in cache: %d\n\n", cache.Len())
+
+	// ── Immediate reads ───────────────────────────────────────────────────────
+	fmt.Println("Immediate reads:")
+	for _, name := range []string{"alice", "bob", "charlie", "diana"} {
+		if v, ok := cache.Get(name); ok {
+			fmt.Printf("  %-10s → %d\n", name, v)
+		}
+	}
+	fmt.Println()
+
+	// ── Overwrite alice with a fresh TTL ─────────────────────────────────────
+	fmt.Println("Overwriting 'alice' with new value+TTL (3 s)...")
+	cache.Set("alice", 99, 3*time.Second) // old expiry node removed from list
+	if v, ok := cache.Get("alice"); ok {
+		fmt.Printf("  alice → %d (refreshed)\n\n", v)
 	}
 
-	// 4. Handle missing keys
-	_, foundBob := userAgeCache.Get("Bob")
-	if !foundBob {
-		fmt.Println("User 'Bob' not found in cache.")
+	// ── Wait for alice & bob to expire ───────────────────────────────────────
+	fmt.Println("Sleeping 3.5 s — alice should expire, bob should still be alive...")
+	time.Sleep(3500 * time.Millisecond)
+	fmt.Println()
+
+	for _, name := range []string{"alice", "bob", "charlie", "diana"} {
+		if v, ok := cache.Get(name); ok {
+			fmt.Printf("  %-10s → %d\n", name, v)
+		} else {
+			fmt.Printf("  %-10s → (expired / not found)\n", name)
+		}
 	}
+	fmt.Printf("\nItems remaining: %d\n\n", cache.Len())
+
+	// ── Wait for bob to expire too ────────────────────────────────────────────
+	fmt.Println("Sleeping another 1 s — bob expires...")
+	time.Sleep(1000 * time.Millisecond)
+	fmt.Println()
+
+	for _, name := range []string{"bob", "charlie", "diana"} {
+		if v, ok := cache.Get(name); ok {
+			fmt.Printf("  %-10s → %d\n", name, v)
+		} else {
+			fmt.Printf("  %-10s → (expired)\n", name)
+		}
+	}
+	fmt.Printf("\nItems remaining: %d\n\n", cache.Len())
+
+	// ── Flush everything ──────────────────────────────────────────────────────
+	fmt.Println("Flushing all remaining items...")
+	cache.Flush()
+	fmt.Printf("Items after flush: %d\n", cache.Len())
 }

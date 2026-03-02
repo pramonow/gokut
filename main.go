@@ -6,73 +6,129 @@ import (
 )
 
 func main() {
-	fmt.Println("=== In-Memory Cache Demo ===")
-	fmt.Println()
+	demoLRU()
+	demoFIFO()
+	demoTTLWithEviction()
+}
 
-	// Start a cache with a janitor that sweeps every 500 ms.
-	cache := NewCache[string, int](500 * time.Millisecond)
+// ── 1. LRU ────────────────────────────────────────────────────────────────────
+
+func demoLRU() {
+	fmt.Println("═══════════════════════════════════════")
+	fmt.Println("  DEMO: LRU  (max 3 items)")
+	fmt.Println("═══════════════════════════════════════")
+
+	cache := NewCache(
+		WithMaxItems[string, int](3),
+		WithEvictionPolicy[string, int](LRU),
+		WithOnEviction[string, int](func(k string, v int) {
+			fmt.Printf("  [evicted] %-10s = %d\n", k, v)
+		}),
+	)
 	defer cache.Stop()
 
-	// Log every eviction so we can see the linked-list janitor at work.
-	cache.SetOnEviction(func(key string, value int) {
-		fmt.Printf("  [eviction] key=%q  value=%d\n", key, value)
-	})
+	fmt.Println("Insert: alice=1, bob=2, charlie=3")
+	cache.Set("alice", 1, NoExpiration)
+	cache.Set("bob", 2, NoExpiration)
+	cache.Set("charlie", 3, NoExpiration)
 
-	// ── Set items with different TTLs ─────────────────────────────────────────
-	fmt.Println("Setting items...")
-	cache.Set("alice", 25, 2*time.Second)   // expires in 2 s
-	cache.Set("bob", 30, 4*time.Second)     // expires in 4 s
-	cache.Set("charlie", 35, 6*time.Second) // expires in 6 s
-	cache.Set("diana", 40, NoExpiration)    // lives forever
+	fmt.Println("Access 'alice' and 'charlie' → bob becomes LRU")
+	cache.Get("alice")
+	cache.Get("charlie")
 
-	fmt.Printf("Items in cache: %d\n\n", cache.Len())
+	fmt.Println("Insert 'diana=4' → bob should be evicted (LRU)")
+	cache.Set("diana", 4, NoExpiration)
 
-	// ── Immediate reads ───────────────────────────────────────────────────────
-	fmt.Println("Immediate reads:")
-	for _, name := range []string{"alice", "bob", "charlie", "diana"} {
-		if v, ok := cache.Get(name); ok {
-			fmt.Printf("  %-10s → %d\n", name, v)
-		}
-	}
+	printState(cache, []string{"alice", "bob", "charlie", "diana"})
+	fmt.Println("Stats:", cache.Stats())
 	fmt.Println()
+}
 
-	// ── Overwrite alice with a fresh TTL ─────────────────────────────────────
-	fmt.Println("Overwriting 'alice' with new value+TTL (3 s)...")
-	cache.Set("alice", 99, 3*time.Second) // old expiry node removed from list
-	if v, ok := cache.Get("alice"); ok {
-		fmt.Printf("  alice → %d (refreshed)\n\n", v)
-	}
+// ── 2. FIFO ───────────────────────────────────────────────────────────────────
 
-	// ── Wait for alice & bob to expire ───────────────────────────────────────
-	fmt.Println("Sleeping 3.5 s — alice should expire, bob should still be alive...")
-	time.Sleep(3500 * time.Millisecond)
+func demoFIFO() {
+	fmt.Println("═══════════════════════════════════════")
+	fmt.Println("  DEMO: FIFO  (max 3 items)")
+	fmt.Println("═══════════════════════════════════════")
+
+	cache := NewCache(
+		WithMaxItems[string, int](3),
+		WithEvictionPolicy[string, int](FIFO),
+		WithOnEviction[string, int](func(k string, v int) {
+			fmt.Printf("  [evicted] %-10s = %d\n", k, v)
+		}),
+	)
+	defer cache.Stop()
+
+	fmt.Println("Insert: alice=1, bob=2, charlie=3")
+	cache.Set("alice", 1, NoExpiration)
+	cache.Set("bob", 2, NoExpiration)
+	cache.Set("charlie", 3, NoExpiration)
+
+	fmt.Println("Access all items (FIFO ignores access order)...")
+	cache.Get("charlie")
+	cache.Get("alice")
+	cache.Get("bob")
+
+	fmt.Println("Insert 'diana=4' → alice should be evicted (first inserted)")
+	cache.Set("diana", 4, NoExpiration)
+
+	printState(cache, []string{"alice", "bob", "charlie", "diana"})
+	fmt.Println("Stats:", cache.Stats())
 	fmt.Println()
+}
 
-	for _, name := range []string{"alice", "bob", "charlie", "diana"} {
-		if v, ok := cache.Get(name); ok {
-			fmt.Printf("  %-10s → %d\n", name, v)
+// ── 3. TTL + LRU together ─────────────────────────────────────────────────────
+
+func demoTTLWithEviction() {
+	fmt.Println("═══════════════════════════════════════")
+	fmt.Println("  DEMO: TTL + LRU together")
+	fmt.Println("═══════════════════════════════════════")
+
+	cache := NewCache(
+		WithMaxItems[string, string](2),
+		WithEvictionPolicy[string, string](LRU),
+		WithCleanupInterval[string, string](200*time.Millisecond),
+		WithOnEviction[string, string](func(k, v string) {
+			fmt.Printf("  [evicted] %s\n", k)
+		}),
+	)
+	defer cache.Stop()
+
+	cache.Set("short", "expires soon", 300*time.Millisecond)
+	cache.Set("long", "lives long", 5*time.Second)
+
+	fmt.Println("Immediately: short=✓, long=✓")
+	printStateStr(cache, []string{"short", "long"})
+
+	fmt.Println("Sleeping 500 ms — 'short' expires, 'new' fits without LRU eviction")
+	time.Sleep(500 * time.Millisecond)
+	cache.Set("new", "just arrived", NoExpiration)
+	printStateStr(cache, []string{"short", "long", "new"})
+
+	fmt.Println("Stats:", cache.Stats())
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+func printState(c *Cache[string, int], keys []string) {
+	fmt.Println("Cache state:")
+	for _, k := range keys {
+		if v, ok := c.Get(k); ok {
+			fmt.Printf("  %-10s → %d\n", k, v)
 		} else {
-			fmt.Printf("  %-10s → (expired / not found)\n", name)
+			fmt.Printf("  %-10s → (not found)\n", k)
 		}
 	}
-	fmt.Printf("\nItems remaining: %d\n\n", cache.Len())
+}
 
-	// ── Wait for bob to expire too ────────────────────────────────────────────
-	fmt.Println("Sleeping another 1 s — bob expires...")
-	time.Sleep(1000 * time.Millisecond)
-	fmt.Println()
-
-	for _, name := range []string{"bob", "charlie", "diana"} {
-		if v, ok := cache.Get(name); ok {
-			fmt.Printf("  %-10s → %d\n", name, v)
+func printStateStr(c *Cache[string, string], keys []string) {
+	fmt.Println("Cache state:")
+	for _, k := range keys {
+		if v, ok := c.Get(k); ok {
+			fmt.Printf("  %-8s → %q\n", k, v)
 		} else {
-			fmt.Printf("  %-10s → (expired)\n", name)
+			fmt.Printf("  %-8s → (not found)\n", k)
 		}
 	}
-	fmt.Printf("\nItems remaining: %d\n\n", cache.Len())
-
-	// ── Flush everything ──────────────────────────────────────────────────────
-	fmt.Println("Flushing all remaining items...")
-	cache.Flush()
-	fmt.Printf("Items after flush: %d\n", cache.Len())
 }

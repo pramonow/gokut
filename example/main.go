@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"time"
+
+	"github.com/pramonow/gokut"
 )
 
 func main() {
@@ -11,59 +13,53 @@ func main() {
 	demoTTLWithEviction()
 }
 
-// ── 1. LRU ────────────────────────────────────────────────────────────────────
-
 func demoLRU() {
 	fmt.Println("═══════════════════════════════════════")
 	fmt.Println("  DEMO: LRU  (max 3 items)")
 	fmt.Println("═══════════════════════════════════════")
 
-	cache := NewCache(
-		WithMaxItems[string, int](3),
-		WithEvictionPolicy[string, int](LRU),
-		WithOnEviction[string, int](func(k string, v int) {
+	cache := gokut.NewCache(
+		gokut.WithMaxItems[string, int](3),
+		gokut.WithEvictionPolicy[string, int](gokut.LRU),
+		gokut.WithOnEviction[string, int](func(k string, v int) {
 			fmt.Printf("  [evicted] %-10s = %d\n", k, v)
 		}),
 	)
 	defer cache.Stop()
 
-	fmt.Println("Insert: alice=1, bob=2, charlie=3")
-	cache.Set("alice", 1, NoExpiration)
-	cache.Set("bob", 2, NoExpiration)
-	cache.Set("charlie", 3, NoExpiration)
+	cache.Set("alice", 1, gokut.NoExpiration)
+	cache.Set("bob", 2, gokut.NoExpiration)
+	cache.Set("charlie", 3, gokut.NoExpiration)
 
 	fmt.Println("Access 'alice' and 'charlie' → bob becomes LRU")
 	cache.Get("alice")
 	cache.Get("charlie")
 
 	fmt.Println("Insert 'diana=4' → bob should be evicted (LRU)")
-	cache.Set("diana", 4, NoExpiration)
+	cache.Set("diana", 4, gokut.NoExpiration)
 
 	printState(cache, []string{"alice", "bob", "charlie", "diana"})
 	fmt.Println("Stats:", cache.Stats())
 	fmt.Println()
 }
 
-// ── 2. FIFO ───────────────────────────────────────────────────────────────────
-
 func demoFIFO() {
 	fmt.Println("═══════════════════════════════════════")
 	fmt.Println("  DEMO: FIFO  (max 3 items)")
 	fmt.Println("═══════════════════════════════════════")
 
-	cache := NewCache(
-		WithMaxItems[string, int](3),
-		WithEvictionPolicy[string, int](FIFO),
-		WithOnEviction[string, int](func(k string, v int) {
+	cache := gokut.NewCache(
+		gokut.WithMaxItems[string, int](3),
+		gokut.WithEvictionPolicy[string, int](gokut.FIFO),
+		gokut.WithOnEviction[string, int](func(k string, v int) {
 			fmt.Printf("  [evicted] %-10s = %d\n", k, v)
 		}),
 	)
 	defer cache.Stop()
 
-	fmt.Println("Insert: alice=1, bob=2, charlie=3")
-	cache.Set("alice", 1, NoExpiration)
-	cache.Set("bob", 2, NoExpiration)
-	cache.Set("charlie", 3, NoExpiration)
+	cache.Set("alice", 1, gokut.NoExpiration)
+	cache.Set("bob", 2, gokut.NoExpiration)
+	cache.Set("charlie", 3, gokut.NoExpiration)
 
 	fmt.Println("Access all items (FIFO ignores access order)...")
 	cache.Get("charlie")
@@ -71,25 +67,23 @@ func demoFIFO() {
 	cache.Get("bob")
 
 	fmt.Println("Insert 'diana=4' → alice should be evicted (first inserted)")
-	cache.Set("diana", 4, NoExpiration)
+	cache.Set("diana", 4, gokut.NoExpiration)
 
 	printState(cache, []string{"alice", "bob", "charlie", "diana"})
 	fmt.Println("Stats:", cache.Stats())
 	fmt.Println()
 }
 
-// ── 3. TTL + LRU together ─────────────────────────────────────────────────────
-
 func demoTTLWithEviction() {
 	fmt.Println("═══════════════════════════════════════")
 	fmt.Println("  DEMO: TTL + LRU together")
 	fmt.Println("═══════════════════════════════════════")
 
-	cache := NewCache(
-		WithMaxItems[string, string](2),
-		WithEvictionPolicy[string, string](LRU),
-		WithCleanupInterval[string, string](200*time.Millisecond),
-		WithOnEviction[string, string](func(k, v string) {
+	cache := gokut.NewCache(
+		gokut.WithMaxItems[string, string](2),
+		gokut.WithEvictionPolicy[string, string](gokut.LRU),
+		gokut.WithCleanupInterval[string, string](200*time.Millisecond),
+		gokut.WithOnEviction[string, string](func(k, v string) {
 			fmt.Printf("  [evicted] %s\n", k)
 		}),
 	)
@@ -98,20 +92,18 @@ func demoTTLWithEviction() {
 	cache.Set("short", "expires soon", 300*time.Millisecond)
 	cache.Set("long", "lives long", 5*time.Second)
 
-	fmt.Println("Immediately: short=✓, long=✓")
+	fmt.Println("Cache state (immediate):")
 	printStateStr(cache, []string{"short", "long"})
 
-	fmt.Println("Sleeping 500 ms — 'short' expires, 'new' fits without LRU eviction")
+	fmt.Println("Sleeping 500 ms — 'short' expires, 'new' fits in the gap")
 	time.Sleep(500 * time.Millisecond)
-	cache.Set("new", "just arrived", NoExpiration)
+	cache.Set("new", "just arrived", gokut.NoExpiration)
 	printStateStr(cache, []string{"short", "long", "new"})
 
 	fmt.Println("Stats:", cache.Stats())
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-func printState(c *Cache[string, int], keys []string) {
+func printState(c *gokut.Cache[string, int], keys []string) {
 	fmt.Println("Cache state:")
 	for _, k := range keys {
 		if v, ok := c.Get(k); ok {
@@ -122,7 +114,7 @@ func printState(c *Cache[string, int], keys []string) {
 	}
 }
 
-func printStateStr(c *Cache[string, string], keys []string) {
+func printStateStr(c *gokut.Cache[string, string], keys []string) {
 	fmt.Println("Cache state:")
 	for _, k := range keys {
 		if v, ok := c.Get(k); ok {

@@ -1,4 +1,4 @@
-package main
+package gokut
 
 // expNode is a node in the expiry-sorted doubly-linked list (sorted by
 // expiresAt ascending).  It carries only what the janitor needs so the list

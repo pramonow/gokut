@@ -1,4 +1,4 @@
-package main
+package gokut
 
 // EvictionPolicy determines which item is removed when the cache is full.
 type EvictionPolicy int
